@@ -66,9 +66,7 @@ public class HeapPage implements Page {
         @return the number of tuples on this page
     */
     private int getNumTuples() {        
-        // some code goes here
-        return 0;
-
+        return Math.floorDiv(BufferPool.getPageSize()*8, td.getSize()*8+1); 
     }
 
     /**
@@ -76,10 +74,7 @@ public class HeapPage implements Page {
      * @return the number of bytes in the header of a page in a HeapFile with each tuple occupying tupleSize bytes
      */
     private int getHeaderSize() {        
-        
-        // some code goes here
-        return 0;
-                 
+        return (int)Math.ceil(getNumTuples() / 8.0);
     }
     
     /** Return a view of this page before it was modified
@@ -111,8 +106,7 @@ public class HeapPage implements Page {
      * @return the PageId associated with this page.
      */
     public HeapPageId getId() {
-    // some code goes here
-    throw new UnsupportedOperationException("implement this");
+        return pid;
     }
 
     /**
@@ -281,16 +275,27 @@ public class HeapPage implements Page {
      * Returns the number of empty slots on this page.
      */
     public int getNumEmptySlots() {
-        // some code goes here
-        return 0;
+        int n = 0;
+        for(int i=0; i<getHeaderSize(); i++){
+            int b = header[i];
+            // 不能用b<<<1，因为1是int类型
+            if((b&1) != 0) n+=1;
+            if((b&2) != 0) n+=1;
+            if((b&4) != 0) n+=1;
+            if((b&8) != 0) n+=1;
+            if((b&16) != 0) n+=1;
+            if((b&32) != 0) n+=1;
+            if((b&64) != 0) n+=1;
+            if((b&128) != 0) n+=1;
+        }
+        return getNumTuples() - n;
     }
 
     /**
      * Returns true if associated slot on this page is filled.
      */
     public boolean isSlotUsed(int i) {
-        // some code goes here
-        return false;
+        return (header[i/8] & (1<<(i%8))) != 0;
     }
 
     /**
@@ -300,14 +305,46 @@ public class HeapPage implements Page {
         // some code goes here
         // not necessary for lab1
     }
+    
+    private class itr implements Iterator<Tuple> {
+        private int i;
+        private final HeapPage p;
+        
+        public itr(HeapPage p){
+            // System.out.print("header:");
+            // for(int i=0 ;i<p.header.length; i++)
+            //     System.out.print(Integer.toBinaryString(header[i]) + " ");
+            // System.out.println();
+            // System.out.print("tuples: len=");
+            // System.out.print(p.tuples.length);
+            // System.out.print(" ");
+            // System.out.println(p.tuples);
+            i = 0;
+            while((i != p.getNumTuples()) && !p.isSlotUsed(i))
+                i += 1;
+            // System.out.println(i);
+            this.p = p;
+        }
+        
+        public boolean hasNext(){
+            return (i != p.getNumTuples());
+        }
+        
+        public Tuple next(){
+            Tuple t = p.tuples[i];
+            i += 1;
+            while((i != p.getNumTuples()) && !p.isSlotUsed(i))
+                i += 1;
+            return t;
+        }
+    }
 
     /**
      * @return an iterator over all tuples on this page (calling remove on this iterator throws an UnsupportedOperationException)
      * (note that this iterator shouldn't return tuples in empty slots!)
      */
     public Iterator<Tuple> iterator() {
-        // some code goes here
-        return null;
+        return new itr(this);
     }
 
 }
