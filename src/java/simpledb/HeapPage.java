@@ -18,6 +18,7 @@ public class HeapPage implements Page {
     final byte header[];
     final Tuple tuples[];
     final int numSlots;
+    private TransactionId dirtyTransaction;
 
     byte[] oldData;
     private final Byte oldDataLock=new Byte((byte)0);
@@ -42,6 +43,7 @@ public class HeapPage implements Page {
         this.pid = id;
         this.td = Database.getCatalog().getTupleDesc(id.getTableId());
         this.numSlots = getNumTuples();
+        this.dirtyTransaction = null;
         DataInputStream dis = new DataInputStream(new ByteArrayInputStream(data));
 
         // allocate and read the header slots of this page
@@ -237,8 +239,12 @@ public class HeapPage implements Page {
      * @param t The tuple to delete
      */
     public void deleteTuple(Tuple t) throws DbException {
-        // some code goes here
-        // not necessary for lab1
+        if(t.getRecordId().getPageId() != pid || t.getRecordId().getTupleNumber() > getNumTuples())
+            throw new DbException("tuple is not on this page");
+        int tno = t.getRecordId().getTupleNumber();
+        if(!isSlotUsed(tno))
+            throw new DbException("tuple is already empty");
+        markSlotUsed(tno, false);
     }
 
     /**
@@ -249,8 +255,16 @@ public class HeapPage implements Page {
      * @param t The tuple to add.
      */
     public void insertTuple(Tuple t) throws DbException {
-        // some code goes here
-        // not necessary for lab1
+        if(!t.getTupleDesc().equals(td))
+            throw new DbException("tuple description not matched");
+        for(int i=0; i<getNumTuples(); i++)
+            if(!isSlotUsed(i)){
+                markSlotUsed(i, true);
+                t.setRecordId(new RecordId(pid, i));
+                tuples[i] = t;
+                return;
+            }
+        throw new DbException("this page is full");
     }
 
     /**
@@ -258,17 +272,17 @@ public class HeapPage implements Page {
      * that did the dirtying
      */
     public void markDirty(boolean dirty, TransactionId tid) {
-        // some code goes here
-	// not necessary for lab1
+        if(dirty)
+            this.dirtyTransaction = tid;
+        else
+            this.dirtyTransaction = null;
     }
 
     /**
      * Returns the tid of the transaction that last dirtied this page, or null if the page is not dirty
      */
     public TransactionId isDirty() {
-        // some code goes here
-	// Not necessary for lab1
-        return null;      
+        return this.dirtyTransaction; 
     }
 
     /**
@@ -302,41 +316,10 @@ public class HeapPage implements Page {
      * Abstraction to fill or clear a slot on this page.
      */
     private void markSlotUsed(int i, boolean value) {
-        // some code goes here
-        // not necessary for lab1
-    }
-    
-    private class itr implements Iterator<Tuple> {
-        private int i;
-        private final HeapPage p;
-        
-        public itr(HeapPage p){
-            // System.out.print("header:");
-            // for(int i=0 ;i<p.header.length; i++)
-            //     System.out.print(Integer.toBinaryString(header[i]) + " ");
-            // System.out.println();
-            // System.out.print("tuples: len=");
-            // System.out.print(p.tuples.length);
-            // System.out.print(" ");
-            // System.out.println(p.tuples);
-            i = 0;
-            while((i != p.getNumTuples()) && !p.isSlotUsed(i))
-                i += 1;
-            // System.out.println(i);
-            this.p = p;
-        }
-        
-        public boolean hasNext(){
-            return (i != p.getNumTuples());
-        }
-        
-        public Tuple next(){
-            Tuple t = p.tuples[i];
-            i += 1;
-            while((i != p.getNumTuples()) && !p.isSlotUsed(i))
-                i += 1;
-            return t;
-        }
+        if(value)
+            header[i/8] |= 1<<(i%8);
+        else
+            header[i/8] &= ~(1<<(i%8));
     }
 
     /**
@@ -344,7 +327,28 @@ public class HeapPage implements Page {
      * (note that this iterator shouldn't return tuples in empty slots!)
      */
     public Iterator<Tuple> iterator() {
-        return new itr(this);
+        return new Iterator<Tuple>(){
+            private int i = 0;
+            
+			public boolean hasNext() {
+                if(i == getNumTuples())
+                    return false;
+				while(!isSlotUsed(i)){
+                    i += 1;
+                    if(i == getNumTuples())
+                        return false;
+                }
+                return true;
+			}
+			
+			public Tuple next() {
+                if(!hasNext())
+                    throw new NoSuchElementException();
+                Tuple t = tuples[i];
+                i += 1;
+                return t;
+			}
+        };
     }
 
 }

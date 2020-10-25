@@ -10,6 +10,13 @@ import java.util.*;
 public class Aggregate extends Operator {
 
     private static final long serialVersionUID = 1L;
+    
+    private final int afield, gfield;
+    private OpIterator child;
+    private final Aggregator.Op aop;
+    
+    private final Aggregator agg;
+    private OpIterator agg_child;
 
     /**
      * Constructor.
@@ -30,7 +37,22 @@ public class Aggregate extends Operator {
      *            The aggregation operator to use
      */
     public Aggregate(OpIterator child, int afield, int gfield, Aggregator.Op aop) {
-	// some code goes here
+        this.child = child;
+        this.afield = afield;
+        this.gfield = gfield;
+        this.aop = aop;
+        
+        switch(child.getTupleDesc().getFieldType(afield)){
+            case INT_TYPE:
+                agg = new IntegerAggregator(gfield, groupFieldType(), afield, aop);
+                break;
+            case STRING_TYPE:
+                agg = new StringAggregator(gfield, groupFieldType(), afield, aop);
+                break;
+            default:
+                agg = null;
+        }
+        agg_child = agg.iterator();
     }
 
     /**
@@ -39,8 +61,14 @@ public class Aggregate extends Operator {
      *         {@link simpledb.Aggregator#NO_GROUPING}
      * */
     public int groupField() {
-	// some code goes here
-	return -1;
+        return gfield;
+    }
+    
+    private Type groupFieldType(){
+        if(gfield == Aggregator.NO_GROUPING)
+            return null;
+        else
+            return child.getTupleDesc().getFieldType(gfield);
     }
 
     /**
@@ -49,16 +77,17 @@ public class Aggregate extends Operator {
      *         null;
      * */
     public String groupFieldName() {
-	// some code goes here
-	return null;
+        if(gfield == Aggregator.NO_GROUPING)
+            return null;
+        else
+            return child.getTupleDesc().getFieldName(gfield);
     }
 
     /**
      * @return the aggregate field
      * */
     public int aggregateField() {
-	// some code goes here
-	return -1;
+        return afield;
     }
 
     /**
@@ -66,25 +95,30 @@ public class Aggregate extends Operator {
      *         tuples
      * */
     public String aggregateFieldName() {
-	// some code goes here
-	return null;
+        return child.getTupleDesc().getFieldName(afield);
     }
 
     /**
      * @return return the aggregate operator
      * */
     public Aggregator.Op aggregateOp() {
-	// some code goes here
-	return null;
+        return aop;
     }
 
     public static String nameOfAggregatorOp(Aggregator.Op aop) {
-	return aop.toString();
+	    return aop.toString();
     }
 
     public void open() throws NoSuchElementException, DbException,
 	    TransactionAbortedException {
-	// some code goes here
+        super.open();
+        
+        child.open();
+        while(child.hasNext())
+            agg.mergeTupleIntoGroup(child.next());
+        child.close();
+        
+        agg_child.open();
     }
 
     /**
@@ -95,12 +129,14 @@ public class Aggregate extends Operator {
      * aggregate. Should return null if there are no more tuples.
      */
     protected Tuple fetchNext() throws TransactionAbortedException, DbException {
-	// some code goes here
-	return null;
+        if(agg_child.hasNext())
+            return agg_child.next();
+        else
+            return null;
     }
 
     public void rewind() throws DbException, TransactionAbortedException {
-	// some code goes here
+        agg_child.rewind();
     }
 
     /**
@@ -115,23 +151,23 @@ public class Aggregate extends Operator {
      * iterator.
      */
     public TupleDesc getTupleDesc() {
-	// some code goes here
-	return null;
+        return agg_child.getTupleDesc();
     }
 
     public void close() {
-	// some code goes here
+        agg_child.close();
+        super.close();
     }
 
     @Override
     public OpIterator[] getChildren() {
-	// some code goes here
-	return null;
+        return new OpIterator[]{child};
     }
 
     @Override
     public void setChildren(OpIterator[] children) {
-	// some code goes here
+        assert(children.length == 1);
+        child = children[0];
     }
     
 }

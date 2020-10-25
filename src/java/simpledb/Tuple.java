@@ -18,6 +18,7 @@ public class Tuple implements Serializable {
     
     private TupleDesc td;
     private Vector<Field> fields;
+    private RecordId rid;
 
     /**
      * Create a new tuple with the specified schema (type).
@@ -45,8 +46,7 @@ public class Tuple implements Serializable {
      *         be null.
      */
     public RecordId getRecordId() {
-        // some code goes here
-        return null;
+        return rid;
     }
 
     /**
@@ -56,7 +56,7 @@ public class Tuple implements Serializable {
      *            the new RecordId for this tuple.
      */
     public void setRecordId(RecordId rid) {
-        // some code goes here
+        this.rid = rid;
     }
 
     /**
@@ -113,5 +113,14 @@ public class Tuple implements Serializable {
     public void resetTupleDesc(TupleDesc td)
     {
         this.td = td;
+    }
+    
+    public static Tuple merge(Tuple t1, Tuple t2){
+        Tuple t = new Tuple(TupleDesc.merge(t1.getTupleDesc(), t2.getTupleDesc()));
+        for(int i=0; i<t1.getTupleDesc().numFields(); i++)
+            t.setField(i, t1.getField(i));
+        for(int i=0; i<t2.getTupleDesc().numFields(); i++)
+            t.setField(i + t1.getTupleDesc().numFields(), t2.getField(i));
+        return t;
     }
 }

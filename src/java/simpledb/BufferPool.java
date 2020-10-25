@@ -1,7 +1,7 @@
 package simpledb;
 
 import java.io.*;
-
+import java.util.ArrayList;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -52,6 +52,12 @@ public class BufferPool {
     public static void resetPageSize() {
     	BufferPool.pageSize = DEFAULT_PAGE_SIZE;
     }
+    
+    private void insertPage(Page p) throws DbException{
+        if(pages.size() == maxNumPages)
+            evictPage();
+        pages.put(p.getId(), p);
+    }
 
     /**
      * Retrieve the specified page with the associated permissions.
@@ -70,13 +76,12 @@ public class BufferPool {
      */
     public  Page getPage(TransactionId tid, PageId pid, Permissions perm)
         throws TransactionAbortedException, DbException {
-        if(this.pages.size() == this.maxNumPages)
-            throw new DbException("too many pages");
+        
         Page p = pages.get(pid);
         if(p == null){
             DbFile f = Database.getCatalog().getDatabaseFile(pid.getTableId());
             p = f.readPage(pid);
-            pages.put(pid, p);
+            insertPage(p);
         }
         return p;
     }
@@ -142,8 +147,13 @@ public class BufferPool {
      */
     public void insertTuple(TransactionId tid, int tableId, Tuple t)
         throws DbException, IOException, TransactionAbortedException {
-        // some code goes here
-        // not necessary for lab1
+        DbFile f = Database.getCatalog().getDatabaseFile(tableId);
+        ArrayList<Page> l = f.insertTuple(tid, t);
+        for(Page p: l){
+            p.markDirty(true, tid);
+            if(!pages.containsKey(p.getId()))
+                insertPage(p);
+        }
     }
 
     /**
@@ -161,8 +171,13 @@ public class BufferPool {
      */
     public  void deleteTuple(TransactionId tid, Tuple t)
         throws DbException, IOException, TransactionAbortedException {
-        // some code goes here
-        // not necessary for lab1
+        DbFile f = Database.getCatalog().getDatabaseFile(t.getRecordId().getPageId().getTableId());
+        ArrayList<Page> l = f.deleteTuple(tid, t);
+        for(Page p: l){
+            p.markDirty(true, tid);
+            if(!pages.containsKey(p.getId()))
+                insertPage(p);
+        }
     }
 
     /**
@@ -171,9 +186,10 @@ public class BufferPool {
      *     break simpledb if running in NO STEAL mode.
      */
     public synchronized void flushAllPages() throws IOException {
-        // some code goes here
-        // not necessary for lab1
-
+        for(Page p: pages.values()){
+            DbFile f = Database.getCatalog().getDatabaseFile(p.getId().getTableId());
+            f.writePage(p);
+        }
     }
 
     /** Remove the specific page id from the buffer pool.
@@ -185,8 +201,7 @@ public class BufferPool {
         are removed from the cache so they can be reused safely
     */
     public synchronized void discardPage(PageId pid) {
-        // some code goes here
-        // not necessary for lab1
+        pages.remove(pid);
     }
 
     /**
@@ -194,8 +209,9 @@ public class BufferPool {
      * @param pid an ID indicating the page to flush
      */
     private synchronized  void flushPage(PageId pid) throws IOException {
-        // some code goes here
-        // not necessary for lab1
+        Page p = pages.get(pid);
+        DbFile f = Database.getCatalog().getDatabaseFile(pid.getTableId());
+        f.writePage(p);
     }
 
     /** Write all pages of the specified transaction to disk.
@@ -209,9 +225,17 @@ public class BufferPool {
      * Discards a page from the buffer pool.
      * Flushes the page to disk to ensure dirty pages are updated on disk.
      */
-    private synchronized  void evictPage() throws DbException {
-        // some code goes here
-        // not necessary for lab1
+    private synchronized void evictPage() throws DbException {
+        if(!pages.isEmpty()){
+            PageId pid = pages.keySet().iterator().next();
+            try {
+                if(pages.get(pid).isDirty() != null)
+                    flushPage(pid);
+            } catch (IOException e){
+                e.printStackTrace();
+                throw new DbException("IOException occurs");
+            }
+            discardPage(pid);
+        }
     }
-
 }

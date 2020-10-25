@@ -1,11 +1,21 @@
 package simpledb;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+
 /**
  * Knows how to compute some aggregate over a set of StringFields.
  */
 public class StringAggregator implements Aggregator {
 
     private static final long serialVersionUID = 1L;
+
+    private final int gbfield, afield;
+    private final Type gbfieldtype;
+    private final Op what;
+    private HashMap<Field, ArrayList<String>> map;
 
     /**
      * Aggregate constructor
@@ -17,7 +27,11 @@ public class StringAggregator implements Aggregator {
      */
 
     public StringAggregator(int gbfield, Type gbfieldtype, int afield, Op what) {
-        // some code goes here
+        this.gbfield = gbfield;
+        this.afield = afield;
+        this.gbfieldtype = gbfieldtype;
+        this.what = what;
+        this.map = new HashMap<>();
     }
 
     /**
@@ -25,7 +39,16 @@ public class StringAggregator implements Aggregator {
      * @param tup the Tuple containing an aggregate field and a group-by field
      */
     public void mergeTupleIntoGroup(Tuple tup) {
-        // some code goes here
+        Field gbf = null;
+        if (gbfield != NO_GROUPING) {
+            assert (tup.getTupleDesc().getFieldType(gbfield) == gbfieldtype);
+            gbf = tup.getField(gbfield);
+        }
+        assert (tup.getTupleDesc().getFieldType(afield) == Type.STRING_TYPE);
+        String af = ((StringField) tup.getField(afield)).getValue();
+        if (!map.containsKey(gbf))
+            map.put(gbf, new ArrayList<>());
+        map.get(gbf).add(af);
     }
 
     /**
@@ -37,8 +60,57 @@ public class StringAggregator implements Aggregator {
      *   aggregate specified in the constructor.
      */
     public OpIterator iterator() {
-        // some code goes here
-        throw new UnsupportedOperationException("please implement me for lab2");
+        return new OpIterator(){
+            private static final long serialVersionUID = 1L;
+            
+            private Iterator<Field> it = null;
+            
+			public void open() throws DbException, TransactionAbortedException {
+				it = map.keySet().iterator();
+			}
+
+			public boolean hasNext() throws DbException, TransactionAbortedException {
+                return it.hasNext();
+			}
+
+			public Tuple next() throws DbException, TransactionAbortedException, NoSuchElementException {
+                Field f = it.next();
+                ArrayList<String> l = map.get(f);
+                int agg;
+                switch(what){
+                    case COUNT:
+                        agg = l.size();
+						break;
+                    default:
+                        throw new DbException("not implemented aggregate function "+what.toString()+" on string");
+                }
+                
+                Tuple t = new Tuple(getTupleDesc());
+                if(gbfield == NO_GROUPING)
+                    t.setField(0, new IntField(agg));
+                else{
+                    t.setField(0, f);
+                    t.setField(1, new IntField(agg));
+                }
+                return t;
+            }
+
+			public void rewind() throws DbException, TransactionAbortedException {
+				it = map.keySet().iterator();
+			}
+
+			public TupleDesc getTupleDesc() {
+                if(gbfield == NO_GROUPING)
+                    return new TupleDesc(new Type[]{Type.INT_TYPE}, new String[]{what.toString()});
+                else
+                    return new TupleDesc(new Type[]{gbfieldtype, Type.INT_TYPE}, new String[]{null, what.toString()});
+			}
+
+			public void close() {
+				it = null;
+			}
+            
+        };
     }
 
 }
