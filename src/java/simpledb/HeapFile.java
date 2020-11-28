@@ -97,8 +97,13 @@ public class HeapFile implements DbFile {
     public ArrayList<Page> insertTuple(TransactionId tid, Tuple t)
             throws DbException, IOException, TransactionAbortedException {
         for(int i=0; i<numPages(); i++){
-            HeapPage p = (HeapPage)Database.getBufferPool().getPage(tid, new HeapPageId(getId(), i), Permissions.READ_WRITE);
-            if(p.getNumEmptySlots() > 0){
+            HeapPage p = (HeapPage)Database.getBufferPool().getPage(tid, new HeapPageId(getId(), i), Permissions.READ_ONLY);
+            if(p.getNumEmptySlots() == 0)
+                Database.getBufferPool().releasePage(tid, p.pid);
+            else{
+                Database.getBufferPool().releasePage(tid, p.pid);
+                p = (HeapPage)Database.getBufferPool().getPage(tid, new HeapPageId(getId(), i), Permissions.READ_WRITE);
+                
                 p.insertTuple(t);
                 ArrayList<Page> l = new ArrayList<Page>();
                 l.add(p);
@@ -107,12 +112,14 @@ public class HeapFile implements DbFile {
         }
         
         // add a new page, but still get it through BufferPool
+        // to prevent concurrency problem, we get the page (and the lock) first and expand the file then
+        HeapPage p = (HeapPage)Database.getBufferPool().getPage(tid, new HeapPageId(getId(), numPages()), Permissions.READ_WRITE);
+        
         BufferedOutputStream bw = new BufferedOutputStream(new FileOutputStream(f, true));
         byte[] emptyData = HeapPage.createEmptyPageData();
         bw.write(emptyData);
         bw.close();
         
-        HeapPage p = (HeapPage)Database.getBufferPool().getPage(tid, new HeapPageId(getId(), numPages()-1), Permissions.READ_WRITE);
         p.insertTuple(t);
         writePage(p);
         ArrayList<Page> l = new ArrayList<Page>();
@@ -131,15 +138,14 @@ public class HeapFile implements DbFile {
     }
 
     // see DbFile.java for javadocs
-    public DbFileIterator iterator(TransactionId tid) {
+    public DbFileIterator iterator(TransactionId tranid) {
         return new DbFileIterator(){
-            private TransactionId tid;
+            private TransactionId tid = tranid;
             private int pageno = 0;
             private HeapPage p;
             private Iterator<Tuple> pgit;
             
             public void open() throws DbException, TransactionAbortedException {
-                tid = new TransactionId();
                 pageno = 0;
                 p = (HeapPage)Database.getBufferPool().getPage(tid, new HeapPageId(getId(), pageno), Permissions.READ_ONLY);
                 pgit = p.iterator();

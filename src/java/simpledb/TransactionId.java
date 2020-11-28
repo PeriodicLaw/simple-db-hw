@@ -42,4 +42,9 @@ public class TransactionId implements Serializable {
 		result = prime * result + (int) (myid ^ (myid >>> 32));
 		return result;
 	}
+	
+	@Override
+	public String toString() {
+		return String.format("%d", myid);
+	}
 }

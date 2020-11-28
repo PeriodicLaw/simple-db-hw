@@ -5,6 +5,8 @@ import java.util.*;
 import javax.swing.*;
 import javax.swing.tree.*;
 
+import simpledb.Predicate.Op;
+
 /**
  * The JoinOptimizer class is responsible for ordering a series of joins
  * optimally, and for selecting the best instantiation of a join for a given
@@ -107,11 +109,7 @@ public class JoinOptimizer {
             // You do not need to implement proper support for these for Lab 3.
             return card1 + cost1 + cost2;
         } else {
-            // Insert your code here.
-            // HINT: You may need to use the variable "j" if you implemented
-            // a join algorithm that's more complicated than a basic
-            // nested-loops join.
-            return -1.0;
+            return cost1 + card1 * cost2 + card1 * card2;
         }
     }
 
@@ -156,7 +154,12 @@ public class JoinOptimizer {
             boolean t2pkey, Map<String, TableStats> stats,
             Map<String, Integer> tableAliasToId) {
         int card = 1;
-        // some code goes here
+        if(joinOp == Op.EQUALS){
+            card = Integer.max(card1, card2);
+            if(t1pkey && card > card2) card = card2;
+            if(t2pkey && card > card1) card = card1;
+        }else if(joinOp == Op.GREATER_THAN || joinOp == Op.GREATER_THAN_OR_EQ || joinOp == Op.LESS_THAN || joinOp == Op.LESS_THAN_OR_EQ)
+            card = (int)(0.3*card1*card2);
         return card <= 0 ? 1 : card;
     }
 
@@ -217,11 +220,27 @@ public class JoinOptimizer {
             HashMap<String, TableStats> stats,
             HashMap<String, Double> filterSelectivities, boolean explain)
             throws ParsingException {
-        //Not necessary for labs 1--3
-
-        // some code goes here
-        //Replace the following
-        return joins;
+        PlanCache pc = new PlanCache();
+        
+        for(int i=1; i<=joins.size(); i++)
+            for(Set<LogicalJoinNode> s : enumerateSubsets(joins, i)) {
+                CostCard bestCostCard = new CostCard();
+                bestCostCard.cost = Double.MAX_VALUE;
+                
+                for(LogicalJoinNode jn: s){
+                    Set<LogicalJoinNode> s1 = new HashSet<>(s);
+                    s1.remove(jn);
+                    
+                    CostCard cc = computeCostAndCardOfSubplan(stats, filterSelectivities, jn, s1, bestCostCard.cost, pc);
+                    if(cc != null)
+                        bestCostCard = cc;
+                }
+                pc.addPlan(s, bestCostCard.cost, bestCostCard.card, bestCostCard.plan);
+            }
+        
+        if(explain)
+            printJoins(joins, pc, stats, filterSelectivities);
+        return pc.getOrder(new HashSet<>(joins));
     }
 
     // ===================== Private Methods =================================

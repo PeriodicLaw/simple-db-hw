@@ -70,4 +70,7 @@ public class HeapPageId implements PageId {
         return data;
     }
 
+    public String toString() {
+        return String.format("%x-%d", tableId, pgNo);
+    }
 }

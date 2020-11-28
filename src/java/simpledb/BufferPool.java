@@ -2,6 +2,10 @@ package simpledb;
 
 import java.io.*;
 import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -26,8 +30,20 @@ public class BufferPool {
     constructor instead. */
     public static final int DEFAULT_PAGES = 50;
     
-    int maxNumPages;
-    ConcurrentHashMap<PageId, Page> pages;
+    private int maxNumPages;
+    private ConcurrentHashMap<PageId, Page> pages;
+    
+    private interface Lock {
+    }
+    private class SharedLock implements Lock {
+        HashSet<TransactionId> readers;
+        SharedLock(HashSet<TransactionId> readers){this.readers = readers;}
+    }
+    private class ExclusiveLock implements Lock {
+        TransactionId owner;
+        ExclusiveLock(TransactionId owner){this.owner = owner;}
+    }
+    private ConcurrentHashMap<PageId, Lock> locks;
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -36,7 +52,8 @@ public class BufferPool {
      */
     public BufferPool(int numPages) {
         this.maxNumPages = numPages;
-        this.pages = new ConcurrentHashMap<>();
+        pages = new ConcurrentHashMap<>();
+        locks = new ConcurrentHashMap<>();
     }
     
     public static int getPageSize() {
@@ -58,6 +75,63 @@ public class BufferPool {
             evictPage();
         pages.put(p.getId(), p);
     }
+    
+    private static final long MAX_TIMEOUT = 1000;
+    
+    private void gainSharedLock(TransactionId tid, PageId pid) throws TransactionAbortedException {
+        long timeout = System.currentTimeMillis() + (long)(Math.random() * MAX_TIMEOUT);
+        while(true){
+            synchronized(locks) {
+                if(locks.get(pid) == null) {
+                    HashSet<TransactionId> readers = new HashSet<>();
+                    readers.add(tid);
+                    locks.put(pid, new SharedLock(readers));
+                    return;
+                } else if(locks.get(pid) instanceof SharedLock){
+                    SharedLock lock = (SharedLock)locks.get(pid);
+                    lock.readers.add(tid);
+                    return;
+                } else {
+                    ExclusiveLock lock = (ExclusiveLock)locks.get(pid);
+                    if(lock.owner == tid)
+                        return;
+                }
+            }
+            
+            if(System.currentTimeMillis() > timeout){
+                throw new TransactionAbortedException();
+            }
+        }
+    }
+    
+    private void gainExclusiveLock(TransactionId tid, PageId pid) throws TransactionAbortedException {
+        // System.out.printf("gain exclusive lock %d %s\n", tid.myid, pid.toString());
+        long timeout = System.currentTimeMillis() + (long)(Math.random() * MAX_TIMEOUT);
+        while(true){
+            synchronized(locks) {
+                if(locks.get(pid) == null) {
+                    locks.put(pid, new ExclusiveLock(tid));
+                    return;
+                } else if(locks.get(pid) instanceof SharedLock){
+                    SharedLock lock = (SharedLock)locks.get(pid);
+                    if(lock.readers.size() == 1 && lock.readers.contains(tid)){
+                        locks.remove(pid);
+                        locks.put(pid, new ExclusiveLock(tid));
+                        return;
+                    }
+                } else if(locks.get(pid) instanceof ExclusiveLock){
+                    ExclusiveLock lock = (ExclusiveLock)locks.get(pid);
+                    if(lock.owner == tid)
+                        return;
+                }
+            }
+            
+            
+            if(System.currentTimeMillis() > timeout){
+                throw new TransactionAbortedException();
+            }
+        }
+    }
 
     /**
      * Retrieve the specified page with the associated permissions.
@@ -77,6 +151,11 @@ public class BufferPool {
     public  Page getPage(TransactionId tid, PageId pid, Permissions perm)
         throws TransactionAbortedException, DbException {
         
+        if(perm == Permissions.READ_ONLY)
+            gainSharedLock(tid, pid);
+        else if(perm == Permissions.READ_WRITE)
+            gainExclusiveLock(tid, pid);
+            
         Page p = pages.get(pid);
         if(p == null){
             DbFile f = Database.getCatalog().getDatabaseFile(pid.getTableId());
@@ -96,8 +175,18 @@ public class BufferPool {
      * @param pid the ID of the page to unlock
      */
     public  void releasePage(TransactionId tid, PageId pid) {
-        // some code goes here
-        // not necessary for lab1|lab2
+        Lock lock = locks.get(pid);
+        assert(lock != null);
+        if(lock instanceof SharedLock){
+            SharedLock slock = (SharedLock)lock;
+            slock.readers.remove(tid);
+            if(slock.readers.isEmpty())
+                locks.remove(pid);
+        }else{
+            ExclusiveLock elock = (ExclusiveLock)lock;
+            assert(elock.owner == tid);
+            locks.remove(pid);
+        }
     }
 
     /**
@@ -106,15 +195,18 @@ public class BufferPool {
      * @param tid the ID of the transaction requesting the unlock
      */
     public void transactionComplete(TransactionId tid) throws IOException {
-        // some code goes here
-        // not necessary for lab1|lab2
+        transactionComplete(tid, true);
     }
 
     /** Return true if the specified transaction has a lock on the specified page */
     public boolean holdsLock(TransactionId tid, PageId p) {
-        // some code goes here
-        // not necessary for lab1|lab2
-        return false;
+        Lock lock = locks.get(p);
+        if(lock == null)
+            return false;
+        else if(lock instanceof SharedLock)
+            return ((SharedLock)lock).readers.contains(tid);
+        else
+            return ((ExclusiveLock)lock).owner == tid;
     }
 
     /**
@@ -126,8 +218,24 @@ public class BufferPool {
      */
     public void transactionComplete(TransactionId tid, boolean commit)
         throws IOException {
-        // some code goes here
-        // not necessary for lab1|lab2
+        if(commit)
+            flushPages(tid);
+        
+        synchronized(locks){
+            for(Map.Entry<PageId, Lock> entry: locks.entrySet()){
+                Lock lock = entry.getValue();
+                if(lock instanceof SharedLock){
+                    ((SharedLock)lock).readers.remove(tid);
+                    if(((SharedLock)lock).readers.size() == 0){
+                        locks.remove(entry.getKey());
+                        discardPage(entry.getKey());
+                    }
+                }else if(lock instanceof ExclusiveLock && ((ExclusiveLock)lock).owner == tid){
+                    locks.remove(entry.getKey());
+                    discardPage(entry.getKey());
+                }
+            }
+        }
     }
 
     /**
@@ -210,6 +318,8 @@ public class BufferPool {
      */
     private synchronized  void flushPage(PageId pid) throws IOException {
         Page p = pages.get(pid);
+        if(p == null || p.isDirty() == null)
+            return;
         DbFile f = Database.getCatalog().getDatabaseFile(pid.getTableId());
         f.writePage(p);
     }
@@ -217,8 +327,17 @@ public class BufferPool {
     /** Write all pages of the specified transaction to disk.
      */
     public synchronized  void flushPages(TransactionId tid) throws IOException {
-        // some code goes here
-        // not necessary for lab1|lab2
+        synchronized(locks){
+            for(Map.Entry<PageId, Lock> entry: locks.entrySet()){
+                Lock lock = entry.getValue();
+                if(lock instanceof SharedLock){
+                    HashSet<TransactionId> readers = ((SharedLock)lock).readers;
+                    if(readers.size() == 1 && readers.contains(tid))
+                        flushPage(entry.getKey());
+                }else if(lock instanceof ExclusiveLock && ((ExclusiveLock)lock).owner == tid)
+                    flushPage(entry.getKey());
+            }
+        }
     }
 
     /**
@@ -227,15 +346,12 @@ public class BufferPool {
      */
     private synchronized void evictPage() throws DbException {
         if(!pages.isEmpty()){
-            PageId pid = pages.keySet().iterator().next();
-            try {
-                if(pages.get(pid).isDirty() != null)
-                    flushPage(pid);
-            } catch (IOException e){
-                e.printStackTrace();
-                throw new DbException("IOException occurs");
-            }
-            discardPage(pid);
+            for(Map.Entry<PageId, Page> entry: pages.entrySet())
+                if(entry.getValue().isDirty() == null){
+                    discardPage(entry.getKey());
+                    return;
+                }
+            throw new DbException("too many dirty pages");
         }
     }
 }
